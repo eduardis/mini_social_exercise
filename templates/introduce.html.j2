@@ -1,0 +1,18 @@
+{% extends "base.html.j2" %}
+{% block content %}
+<div class="col-md-6 mx-auto">
+  <h2>Welcome to Mini Social, {{ user.username }}! 👋</h2>
+  <p class="text-muted">Tell the community a bit about yourself. People are much more likely to talk to you if they know who you are!</p>
+
+  <form method="POST">
+    <label class="form-label">About me (shown on your profile)</label>
+    <textarea name="profile" class="form-control mb-3" rows="3" placeholder="For example: student from Athens, I love football and cooking">{{ user.profile or '' }}</textarea>
+
+    <label class="form-label">Introduction post (everyone will see it in the feed)</label>
+    <textarea name="intro" class="form-control mb-3" rows="3" placeholder="Hi everyone! I'm new here..."></textarea>
+
+    <button type="submit" class="btn btn-primary">Introduce myself</button>
+    <a href="/" class="btn btn-light">Skip</a>
+  </form>
+</div>
+{% endblock %}

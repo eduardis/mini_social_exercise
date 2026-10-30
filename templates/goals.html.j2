@@ -1,0 +1,27 @@
+{% extends "base.html.j2" %}
+{% block content %}
+<div class="col-md-6 mx-auto">
+  <h2 class="mb-4">My weekly goal</h2>
+
+  {% if goal %}
+    <p>Posts this week: <b>{{ posts }} / {{ goal.posts_goal }}</b></p>
+    <p>Comments this week: <b>{{ comments }} / {{ goal.comments_goal }}</b></p>
+    {% if posts >= goal.posts_goal and comments >= goal.comments_goal %}
+      <p class="text-success"><b>Goal reached!</b></p>
+    {% endif %}
+  {% else %}
+    <p>You don't have a goal for this week.</p>
+  {% endif %}
+
+  <hr>
+  <h5>Set a new goal</h5>
+  <p class="text-muted">Try a challenging goal, for example 3 posts and 6 comments!</p>
+  <form method="POST">
+    <label>Posts</label>
+    <input type="number" name="posts_goal" class="form-control mb-2" min="0" value="3">
+    <label>Comments</label>
+    <input type="number" name="comments_goal" class="form-control mb-3" min="0" value="6">
+    <button type="submit" class="btn btn-primary">Save</button>
+  </form>
+</div>
+{% endblock %}

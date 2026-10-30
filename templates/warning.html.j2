@@ -1,0 +1,27 @@
+{% extends "base.html.j2" %}
+{% block content %}
+<div class="col-md-8 mx-auto">
+  <div class="card border-danger">
+    <div class="card-body">
+      <h4 class="text-danger">Wait! Your text breaks the community rules</h4>
+      <ul>
+        {% for p in problems %}
+          <li>{{ p }}</li>
+        {% endfor %}
+      </ul>
+      <p>If you publish it like this, other people will see:</p>
+      <p class="border rounded p-2 bg-light">{{ moderated }}</p>
+      <p><a href="/rules" target="_blank">Read the rules</a></p>
+
+      <form action="{{ action_url }}" method="POST">
+        <input type="hidden" name="next" value="{{ back_url }}">
+        <label>Edit your text:</label>
+        <textarea name="content" class="form-control mb-3" rows="3" required>{{ content }}</textarea>
+        <button type="submit" class="btn btn-primary">Check again and post</button>
+        <button type="submit" name="confirmed" value="yes" class="btn btn-outline-danger">Post anyway</button>
+        <a href="{{ back_url }}" class="btn btn-light">Cancel</a>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

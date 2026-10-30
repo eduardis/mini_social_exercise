@@ -22,6 +22,45 @@
 </div>
 {% endif %}
 
+{% if newcomers %}
+<div class="col-md-8 mx-auto mb-4">
+  <div class="card border-success">
+    <div class="card-body">
+      <h5>👋 New members joined this week. Say hello!</h5>
+      {% for n in newcomers %}
+        <div class="border rounded p-2 mt-2">
+          <b><a href="/u/{{ n.username }}">@{{ n.username }}</a></b>
+          <p class="mb-2 text-muted">{{ n.profile or "No introduction yet." }}</p>
+          <form action="/messages/{{ n.username }}" method="POST" class="d-flex">
+            <input type="text" name="content" class="form-control form-control-sm me-2"
+                   value="Welcome to Mini Social, {{ n.username }}! Nice to have you here 😊" required>
+            <button type="submit" class="btn btn-success btn-sm">Send welcome</button>
+          </form>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if waiting %}
+<div class="col-md-8 mx-auto mb-4">
+  <div class="card border-warning">
+    <div class="card-body">
+      <h5>{{ session.get('username') }}, nobody has replied to these posts yet. Be the first!</h5>
+      {% for w in waiting %}
+        <div class="border rounded p-2 mt-2">
+          <b>@{{ w.username }}:</b> {{ w.content }}
+          <form action="/posts/{{ w.id }}/comment" method="POST" class="d-flex mt-2">
+            <input type="text" name="content" class="form-control form-control-sm me-2" placeholder="Your reply..." required>
+            <button type="submit" class="btn btn-warning btn-sm">Reply</button>
+          </form>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endif %}
 <h2 class="text-center border-bottom pb-2 mb-4"><span>Posts</span></h2>
 
 <div class="mb-4 text-center">

@@ -1,0 +1,21 @@
+{% extends "base.html.j2" %}
+{% block content %}
+<div class="col-md-6 mx-auto">
+  <h2 class="mb-4">Chat with @{{ other.username }}</h2>
+
+  {% for m in chat %}
+    {% if m.sender_id == session.get('user_id') %}
+      <p class="text-end"><span class="bg-primary text-white rounded p-2">{{ m.content }}</span></p>
+    {% else %}
+      <p><span class="bg-white border rounded p-2">{{ m.content }}</span></p>
+    {% endif %}
+  {% else %}
+    <p class="text-muted">No messages yet.</p>
+  {% endfor %}
+
+  <form method="POST" class="d-flex mt-4">
+    <input type="text" name="content" class="form-control me-2" placeholder="Write a message..." required>
+    <button type="submit" class="btn btn-primary">Send</button>
+  </form>
+</div>
+{% endblock %}

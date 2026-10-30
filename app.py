@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, session, flash, g
+from flask import Flask, render_template, request, redirect, url_for, session, flash, g, abort
 from werkzeug.security import generate_password_hash, check_password_hash
 from cryptography.fernet import Fernet
 import collections
@@ -6,7 +6,7 @@ import json
 import sqlite3
 import hashlib
 import re
-from datetime import datetime
+from datetime import datetime, timedelta 
 
 app = Flask(__name__)
 app.secret_key = '123456789' 
@@ -192,7 +192,20 @@ def feed():
         })
 
     #  4. Render Template with Pagination Info 
+
+    #Feature 2
+    waiting = []
+    if current_user_id:
+        waiting = waiting_posts(current_user_id)
+
+        
+    newcomers = []
+    if current_user_id:
+        newcomers = get_newcomers(current_user_id)
+
     return render_template('feed.html.j2', 
+                           waiting = waiting, 
+                           newcomers = newcomers,
                            posts=posts_data, 
                            current_sort=sort,
                            current_show=show,
@@ -217,6 +230,11 @@ def add_post():
     # Pass the user's content through the moderation function
     moderated_content = content
 
+    
+    # Assignment 2 - Design Claim 20: warn the user BEFORE the post is published
+    if needs_warning(content):
+        return show_warning(content, url_for('add_post'), url_for('feed'))
+
     # Basic validation to ensure post is not empty
     if moderated_content and moderated_content.strip():
         db = get_db()
@@ -224,6 +242,7 @@ def add_post():
                    (user_id, moderated_content))
         db.commit()
         flash('Your post was successfully created!', 'success')
+        goal_feedback(user_id)
     else:
         # This will catch empty posts or posts that were fully censored
         flash('Post cannot be empty or was fully censored.', 'warning')
@@ -438,7 +457,8 @@ def signup():
 
             # 3. Flash a welcome message and redirect to the feed.
             flash(f'Welcome, {username}! Your account has been created.', 'success')
-            return redirect(url_for('feed')) # Redirect to the main feed/dashboard
+            # Assignment 3 - Design Claim 19: ask the newcomer to introduce themselves
+            return redirect(url_for('introduce'))
 
         except sqlite3.IntegrityError:
             flash('Username already taken. Please choose another one.', 'danger')
@@ -492,6 +512,11 @@ def add_comment(post_id):
     # Get content from the submitted form
     content = request.form.get('content')
 
+    # Assignment 2 - Design Claim 20: warn the user BEFORE the comment is published
+    back = request.form.get('next') or request.referrer or url_for('post_detail', post_id=post_id)
+    if needs_warning(content):
+        return show_warning(content, url_for('add_comment', post_id=post_id), back)
+
     # Basic validation to ensure comment is not empty
     if content and content.strip():
         db = get_db()
@@ -499,11 +524,12 @@ def add_comment(post_id):
                    (post_id, user_id, content))
         db.commit()
         flash('Your comment was added.', 'success')
+        goal_feedback(user_id)
     else:
         flash('Comment cannot be empty.', 'warning')
 
     # Redirect back to the page the user came from (likely the post detail page)
-    return redirect(request.referrer or url_for('post_detail', post_id=post_id))
+    return redirect(back)
 
 @app.route('/comments/<int:comment_id>/delete', methods=['POST'])
 def delete_comment(comment_id):
@@ -856,6 +882,203 @@ def admin_delete_comment(comment_id):
 def rules():
     return render_template('rules.html.j2')
 
+
+# ================= ASSIGNMENT 1 =================
+
+# create the new tables if they don't exist
+def create_tables():
+    db = sqlite3.connect(DATABASE)
+    db.execute('''CREATE TABLE IF NOT EXISTS goals (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    week TEXT NOT NULL,
+                    posts_goal INTEGER NOT NULL,
+                    comments_goal INTEGER NOT NULL)''')
+    db.execute('''CREATE TABLE IF NOT EXISTS messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    sender_id INTEGER NOT NULL,
+                    receiver_id INTEGER NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+    db.commit()
+    db.close()
+
+create_tables()
+
+
+# Feature 1: weekly goals
+
+def this_week():
+    # returns the date of this week's Monday
+    today = datetime.utcnow().date()
+    return str(today - timedelta(days=today.weekday()))
+
+
+def get_progress(user_id):
+    week = this_week()
+    goal = query_db('SELECT * FROM goals WHERE user_id = ? AND week = ?', (user_id, week), one=True)
+    posts = query_db('SELECT COUNT(*) AS c FROM posts WHERE user_id = ? AND created_at >= ?', (user_id, week), one=True)['c']
+    comments = query_db('SELECT COUNT(*) AS c FROM comments WHERE user_id = ? AND created_at >= ?', (user_id, week), one=True)['c']
+    return goal, posts, comments
+
+
+def goal_feedback(user_id):
+    # message after every post/comment
+    goal, posts, comments = get_progress(user_id)
+    if goal is None:
+        return
+    posts_left = max(0, goal['posts_goal'] - posts)
+    comments_left = max(0, goal['comments_goal'] - comments)
+    if posts_left == 0 and comments_left == 0:
+        flash('You reached your weekly goal!', 'success')
+    else:
+        flash(f'Weekly goal: {posts_left} posts and {comments_left} comments left', 'info')
+
+
+@app.route('/goals', methods=['GET', 'POST'])
+def goals():
+    user_id = session.get('user_id')
+    if not user_id:
+        return redirect(url_for('login'))
+
+    if request.method == 'POST':
+        posts_goal = int(request.form['posts_goal'])
+        comments_goal = int(request.form['comments_goal'])
+        if posts_goal + comments_goal == 0:
+            flash('Your goal must be at least 1 post or comment', 'warning')
+            return redirect(url_for('goals'))
+        db = get_db()
+        db.execute('DELETE FROM goals WHERE user_id = ? AND week = ?', (user_id, this_week()))
+        db.execute('INSERT INTO goals (user_id, week, posts_goal, comments_goal) VALUES (?, ?, ?, ?)',
+                   (user_id, this_week(), posts_goal, comments_goal))
+        db.commit()
+        flash('Goal saved!', 'success')
+        return redirect(url_for('goals'))
+
+    goal, posts, comments = get_progress(user_id)
+    return render_template('goals.html.j2', goal=goal, posts=posts, comments=comments)
+
+
+# Feature 2: posts waiting for a reply
+
+def waiting_posts(user_id):
+    # posts with no comments, from people the user follows
+    posts = query_db('''SELECT p.id, p.content, u.username FROM posts p
+                        JOIN users u ON p.user_id = u.id
+                        WHERE p.user_id IN (SELECT followed_id FROM follows WHERE follower_id = ?)
+                        AND p.id NOT IN (SELECT post_id FROM comments)
+                        ORDER BY p.created_at DESC LIMIT 3''', (user_id,))
+
+    # if there are none, show any post with no comments (not the user's own)
+    if not posts:
+        posts = query_db('''SELECT p.id, p.content, u.username FROM posts p
+                            JOIN users u ON p.user_id = u.id
+                            WHERE p.user_id != ?
+                            AND p.id NOT IN (SELECT post_id FROM comments)
+                            ORDER BY p.created_at DESC LIMIT 3''', (user_id,))
+    return posts
+
+
+# Feature 3: private messages
+
+@app.route('/messages/<username>', methods=['GET', 'POST'])
+def messages(username):
+    user_id = session.get('user_id')
+    if not user_id:
+        return redirect(url_for('login'))
+
+    other = query_db('SELECT id, username FROM users WHERE username = ?', (username,), one=True)
+    if other is None:
+        abort(404)
+
+    if request.method == 'POST':
+        content = request.form['content']
+        if content.strip():
+            db = get_db()
+            db.execute('INSERT INTO messages (sender_id, receiver_id, content) VALUES (?, ?, ?)',
+                       (user_id, other['id'], content))
+            db.commit()
+        return redirect(url_for('messages', username=username))
+
+    chat = query_db('''SELECT * FROM messages
+                       WHERE (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)
+                       ORDER BY created_at''', (user_id, other['id'], other['id'], user_id))
+    return render_template('messages.html.j2', other=other, chat=chat)
+
+
+
+# ================= ASSIGNMENT 2 =================
+# Design Claim 20 (Ch.4): Offering people reminders at the point of an action
+# that may violate norms reduces the number of offenses.
+
+def needs_warning(content):
+    # warn only if the text breaks a rule and the user hasn't confirmed yet
+    if request.form.get('confirmed') == 'yes':
+        return False
+    _, score = moderate_content(content)
+    return score > 0
+
+
+def show_warning(content, action_url, back_url):
+    moderated, score = moderate_content(content)
+
+    # explain to the user which rules the text breaks
+    problems = []
+    if moderated.startswith('[content removed'):
+        problems.append('It contains words or phrases that are not allowed at all. The whole text will be removed.')
+    else:
+        if '*' in moderated:
+            problems.append('It contains offensive words. They will be replaced with ***.')
+        if '[link removed]' in moderated:
+            problems.append('It contains links. Links are not allowed and will be removed.')
+        if not problems:
+            problems.append('It is written mostly in CAPITAL LETTERS, which looks like shouting.')
+
+    return render_template('warning.html.j2', content=content, moderated=moderated,
+                           problems=problems, action_url=action_url, back_url=back_url)
+
+
+
+# ================= ASSIGNMENT 3 =================
+
+# ----- Design Claim 19 (Ch.5): newcomers introduce themselves -----
+
+@app.route('/introduce', methods=['GET', 'POST'])
+def introduce():
+    user_id = session.get('user_id')
+    if not user_id:
+        return redirect(url_for('login'))
+
+    if request.method == 'POST':
+        profile = request.form['profile']
+        intro = request.form['intro']
+        db = get_db()
+        # save the profile text
+        db.execute('UPDATE users SET profile = ? WHERE id = ?', (profile, user_id))
+        # publish the introduction as a post so others can reply to it
+        if intro.strip():
+            db.execute('INSERT INTO posts (user_id, content) VALUES (?, ?)',
+                       (user_id, intro + ' #NewHere'))
+        db.commit()
+        flash('Thanks for introducing yourself! Other members can now say hi.', 'success')
+        return redirect(url_for('feed'))
+
+    user = query_db('SELECT * FROM users WHERE id = ?', (user_id,), one=True)
+    return render_template('introduce.html.j2', user=user)
+
+
+# ----- Design Claim 18 (Ch.5): friendly interactions with newcomers -----
+
+def get_newcomers(user_id):
+    # users who joined in the last 7 days (not the current user)
+    return query_db('''SELECT id, username, profile, created_at FROM users
+                       WHERE created_at >= datetime('now', '-7 days') AND id != ?
+                       ORDER BY created_at DESC LIMIT 5''', (user_id,))
+
+# ================================================
+
+
+
 @app.template_global()
 def loop_color(user_id):
     # Generate a pastel color based on user_id hash
@@ -884,9 +1107,53 @@ def user_risk_analysis(user_id):
         Then, navigate to the /admin endpoint. (http://localhost:8080/admin)
     """
     
-    score = 0
+    user = query_db('SELECT profile, created_at FROM users WHERE id = ?', (user_id,), one=True)
+    if user is None:
+        return 0
 
-    return score;
+    # Step 1: score of the profile text
+    _, profile_score = moderate_content(user['profile'])
+
+    # Step 2: average score of all posts (0 if no posts)
+    posts = query_db('SELECT content FROM posts WHERE user_id = ?', (user_id,))
+    average_post_score = 0
+    if len(posts) > 0:
+        total = 0
+        for post in posts:
+            _, s = moderate_content(post['content'])
+            total += s
+        average_post_score = total / len(posts)
+
+    # Step 3: average score of all comments (0 if no comments)
+    comments = query_db('SELECT content FROM comments WHERE user_id = ?', (user_id,))
+    average_comment_score = 0
+    if len(comments) > 0:
+        total = 0
+        for comment in comments:
+            _, s = moderate_content(comment['content'])
+            total += s
+        average_comment_score = total / len(comments)
+
+    # Step 4: combine the scores (posts count 3 times more)
+    content_risk_score = profile_score * 1 + average_post_score * 3 + average_comment_score * 1
+
+    # Step 5: new accounts are more risky
+    created_at = user['created_at']
+    if isinstance(created_at, str):
+        created_at = datetime.strptime(created_at, '%Y-%m-%d %H:%M:%S')
+    account_age = (datetime.utcnow() - created_at).days
+
+    if account_age < 7:
+        score = content_risk_score * 1.5
+    elif account_age < 30:
+        score = content_risk_score * 1.2
+    else:
+        score = content_risk_score
+
+    # Step 6: maximum is 5.0
+    score = min(score, 5.0)
+
+    return score
 
     
 # Assignment 2.1
@@ -907,9 +1174,43 @@ def moderate_content(content):
     Then, navigate to the /admin endpoint. (http://localhost:8080/admin)
     """
 
+    # empty profile/post: nothing to check
+    if not content:
+        return content, 0
+
+    # Rule 1.1.1: Tier 1 words -> remove everything, score 5
+    for word in TIER1_WORDS:
+        if re.search(r'\b' + re.escape(word) + r'\b', content, re.IGNORECASE):
+            return '[content removed due to severe violation]', 5.0
+
+    # Rule 1.1.2: Tier 2 phrases (spam/scam) -> remove everything, score 5
+    for phrase in TIER2_PHRASES:
+        if re.search(r'\b' + re.escape(phrase) + r'\b', content, re.IGNORECASE):
+            return '[content removed due to spam/scam policy]', 5.0
+
     moderated_content = content
     score = 0
-    
+
+    # Rule 1.2.1: Tier 3 words -> replace with *** and +2 for each match
+    for word in TIER3_WORDS:
+        pattern = r'\b' + re.escape(word) + r'\b'
+        matches = re.findall(pattern, moderated_content, re.IGNORECASE)
+        score += 2 * len(matches)
+        moderated_content = re.sub(pattern, '*' * len(word), moderated_content, flags=re.IGNORECASE)
+
+    # Rule 1.2.2: links -> [link removed] and +2 for each link
+    url_pattern = r'(https?://\S+|www\.\S+)'
+    links = re.findall(url_pattern, moderated_content, re.IGNORECASE)
+    score += 2 * len(links)
+    moderated_content = re.sub(url_pattern, '[link removed]', moderated_content, flags=re.IGNORECASE)
+
+    # Rule 1.2.3: too many capital letters -> +0.5 (text is not changed)
+    letters = [c for c in content if c.isalpha()]
+    if len(letters) > 15:
+        uppercase = [c for c in letters if c.isupper()]
+        if len(uppercase) / len(letters) > 0.7:
+            score += 0.5
+
     return moderated_content, score
 
 # Coding Assignment #3
@@ -934,9 +1235,71 @@ def recommend(user_id, filter_following):
     - https://www.researchgate.net/publication/227268858_Recommender_Systems_Handbook
     """
 
-    recommended_posts = {} 
+        # Not logged in: just show the 5 most popular posts
+    if not user_id:
+        return query_db('''SELECT p.id, p.content, p.created_at, u.username, u.id AS user_id
+                           FROM posts p JOIN users u ON p.user_id = u.id
+                           LEFT JOIN reactions r ON r.post_id = p.id
+                           GROUP BY p.id ORDER BY COUNT(r.id) DESC LIMIT 5''')
 
-    return recommended_posts;
+    # 1. Posts the user reacted to positively
+    liked_posts = query_db('''SELECT p.content, p.user_id FROM reactions r
+                              JOIN posts p ON p.id = r.post_id
+                              WHERE r.user_id = ?
+                              AND r.reaction_type IN ('like', 'love', 'laugh', 'haha', 'wow')''', (user_id,))
+
+    # 2. Find the user's interests: count the words of the posts they liked
+    stop_words = ['the', 'and', 'for', 'that', 'this', 'with', 'you', 'are', 'was', 'have',
+                  'just', 'but', 'not', 'all', 'about', 'what', 'from', 'out', 'can', 'its',
+                  'it’s', "it's", 'my', 'is', 'to', 'of', 'in', 'a', 'i', 'it', 'so', 'on',
+                  'be', 'at', 'me', 'we', 'an', 'or', 'do', 'if', 'up', 'some', 'who', 'how']
+    interests = {}
+    for post in liked_posts:
+        for word in re.findall(r'\w+', post['content'].lower()):
+            if word not in stop_words and len(word) > 2:
+                interests[word] = interests.get(word, 0) + 1
+
+    # 3. Authors the user follows, and authors of posts the user liked
+    followed = [row['followed_id'] for row in
+                query_db('SELECT followed_id FROM follows WHERE follower_id = ?', (user_id,))]
+    liked_authors = [post['user_id'] for post in liked_posts]
+
+    # 4. Candidates: posts that are not the user's own and that the user has not reacted to yet
+    candidates = query_db('''SELECT p.id, p.content, p.created_at, u.username, u.id AS user_id
+                             FROM posts p JOIN users u ON p.user_id = u.id
+                             WHERE p.user_id != ?
+                             AND p.id NOT IN (SELECT post_id FROM reactions WHERE user_id = ?)''',
+                          (user_id, user_id))
+
+    # 5. Give every candidate a score
+    scored = []
+    for post in candidates:
+        if filter_following and post['user_id'] not in followed:
+            continue
+        score = 0
+        words = set(re.findall(r'\w+', post['content'].lower()))
+        for word in words:
+            score += interests.get(word, 0)     # same words as the posts they liked
+        if post['user_id'] in followed:
+            score += 3                           # they follow the author
+        if post['user_id'] in liked_authors:
+            score += 2                           # they liked this author before
+        if score > 0:
+            scored.append((score, post))
+
+    # 6. Take the 5 best ones and show them newest first
+    scored.sort(key=lambda x: x[0], reverse=True)
+    best = [post for score, post in scored[:5]]
+    best.sort(key=lambda post: str(post['created_at']), reverse=True)
+
+    # if we don't know anything about the user yet, show the 5 newest posts
+    if not best and not filter_following:
+        best = query_db('''SELECT p.id, p.content, p.created_at, u.username, u.id AS user_id
+                           FROM posts p JOIN users u ON p.user_id = u.id
+                           WHERE p.user_id != ?
+                           ORDER BY p.created_at DESC LIMIT 5''', (user_id,))
+
+    return best
 
 if __name__ == '__main__':
     app.run(debug=True, port=8080)
